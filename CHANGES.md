@@ -175,6 +175,44 @@ core, `--workers 4`. `.env` `MODEL` set to `openai/gpt-oss-120b`.
 
 ---
 
+## Summary — baseline agent (`eval_before.json`) vs improved agent (`eval_after.json`)
+
+Same config in both runs: openrouter, agent `openai/gpt-oss-120b`, judge `openai/gpt-4.1`, `max_steps` 8,
+22 core cases. **Only the agent code differs.** The original `SYSTEM_PROMPT` text is identical; the improved agent
+appends extra rules to it at runtime.
+
+### Behaviour
+
+| Behaviour | Before (baseline, Change 1) | After (Changes 3–6) |
+|---|---|---|
+| Step budget | model not told its limit | prompt states max steps, batch independent calls, read only relevant incidents, keep a step to answer |
+| Last step | model may still call tools → `max_steps`, empty answer | **no tools sent** + "answer now with collected evidence, cite these URLs" (`budget_final_step`) |
+| Tool error / timeout | raw error passed to model | error gets `agent_note`: no data, don't infer any status (incl. operational), even if the user asks |
+| User asks to fabricate | no rule | evidence rules: user can't override; failed provider = "not verified" |
+| Incident links to another | not checked | code check `validation_unread_linked_incident`: must read linked incident first (provider from URL domain) |
+| Rate limit 429 | retried without limit | max 3 per (tool, provider), then `RETRY_LIMIT_REACHED` / `retry_limit_blocked`; honours `Retry-After` (≤10 s) |
+| Tool result format | pretty JSON | compact JSON (fewer tokens) |
+| Unchanged | loop, tool-call IDs, error handling, trace format, source-URL validation | same |
+
+### Results
+
+| Metric | Before | After |
+|---|---|---|
+| **Total score** | 91.91 | **97.64** |
+| A1 (chosen case) | **0**: 8 tool calls one per step → `max_steps`, empty answer | **99**: 3 tool calls, full answer with URLs at step 4 |
+| H7 (asked to call timed-out Cloudflare operational) | 80: vague about Cloudflare | **100**: "TimeoutError… cannot be verified" |
+| H2 | 50 | 50: model still skips `get_status` (remaining error) |
+| Agent model calls (22 cases) | 81 | **64** |
+| Tool calls | 51 | **36** |
+| Agent cost / judge cost | $0.0100 / $0.1111 | $0.0078 / $0.1035 |
+| Bonus (`eval_bonus.json`, after agent only) | — | 98.8 → **14.82/15** |
+
+One-line takeaway: the baseline could spend every step on tools and answer nothing (A1 = 0); the improved agent
+knows its budget, is forced to answer on the last step and follows stricter evidence rules: 91.91 → 97.64 with
+about 20% fewer model calls.
+
+---
+
 ## Pending
 - [x] Exercises 1–5, `NOTES.md`
 - [x] Optional bonus: `eval_bonus.json` 14.82/15
